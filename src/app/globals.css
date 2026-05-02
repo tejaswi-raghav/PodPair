@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@layer base {
+  :root {
+    --color-brand: #4f6ef7;
+  }
+
+  body {
+    @apply bg-surface-0 text-white antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  * {
+    @apply border-white/10;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-brand-500 hover:bg-brand-600 active:bg-brand-700
+           text-white font-medium px-6 py-3 rounded-2xl
+           transition-all duration-150 disabled:opacity-40
+           disabled:cursor-not-allowed shadow-lg shadow-brand-500/20;
+  }
+
+  .btn-ghost {
+    @apply bg-white/5 hover:bg-white/10 active:bg-white/15
+           text-white/80 font-medium px-6 py-3 rounded-2xl
+           transition-all duration-150 border border-white/10;
+  }
+
+  .card {
+    @apply bg-surface-2 rounded-3xl border border-white/5 p-6;
+  }
+
+  .input {
+    @apply w-full bg-surface-1 border border-white/10 rounded-2xl
+           px-4 py-3 text-white placeholder-white/30 text-sm
+           focus:outline-none focus:ring-2 focus:ring-brand-500/50
+           focus:border-brand-500/50 transition-all;
+  }
+
+  .tag {
+    @apply inline-flex items-center gap-1 px-3 py-1 rounded-full
+           text-xs font-medium bg-brand-500/10 text-brand-400
+           border border-brand-500/20;
+  }
+
+  .mood-chip {
+    @apply px-4 py-2 rounded-full text-sm font-medium border
+           transition-all cursor-pointer select-none;
+  }
+}
+
+/* Pulsing ring for live indicator */
+@keyframes ring-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50%       { transform: scale(1.4); opacity: 0;   }
+}
+
+.live-ring::after {
+  content: '';
+  @apply absolute inset-0 rounded-full bg-red-500;
+  animation: ring-pulse 2s ease-out infinite;
+}
+
+/* Waveform bars for audio indicator */
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.3); }
+  50%       { transform: scaleY(1);   }
+}
+
+.wave-bar { animation: wave 1.2s ease-in-out infinite; }
+.wave-bar:nth-child(2) { animation-delay: 0.15s; }
+.wave-bar:nth-child(3) { animation-delay: 0.30s; }
+.wave-bar:nth-child(4) { animation-delay: 0.45s; }
+.wave-bar:nth-child(5) { animation-delay: 0.60s; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-white/10 rounded-full; }

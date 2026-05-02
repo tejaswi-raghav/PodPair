@@ -1,0 +1,203 @@
+// PodPair Database Schema
+// Architecture: PostgreSQL via Prisma ORM
+// Stateless design — no session state in DB, handled by Redis/JWT
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── USERS ────────────────────────────────────────────────────────────────────
+// Central identity. Auth handled externally (Firebase/Auth0).
+// firebaseUid links our DB record to the auth provider.
+
+model User {
+  id            String   @id @default(cuid())
+  firebaseUid   String   @unique // external auth provider ID
+  email         String   @unique
+  name          String
+  ageRange      AgeRange
+  bio           String?  @db.Text
+  avatarUrl     String?
+  interests     String[] // free-form tags: ["tech", "fitness", "relationships"]
+  reputationScore Float  @default(5.0) // 0–10, weighted average of ratings
+  totalSessions Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  matchesAsUserA Match[]     @relation("MatchUserA")
+  matchesAsUserB Match[]     @relation("MatchUserB")
+  sessionsAsA    Session[]   @relation("SessionUserA")
+  sessionsAsB    Session[]   @relation("SessionUserB")
+  ratingsGiven   Rating[]    @relation("RatingsGiven")
+  ratingsReceived Rating[]   @relation("RatingsReceived")
+  recordings     RecordingParticipant[]
+  queueEntry     MatchQueue?
+
+  @@index([firebaseUid])
+  @@index([reputationScore])
+  @@index([isActive])
+}
+
+enum AgeRange {
+  AGE_18_22
+  AGE_23_27
+  AGE_28_32
+  AGE_33_37
+  AGE_38_PLUS
+}
+
+// ─── MATCH QUEUE ──────────────────────────────────────────────────────────────
+// Ephemeral — users enter/leave. One record per user max.
+// Redis mirrors this for real-time matching speed.
+
+model MatchQueue {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  topic     String   // "tech" | "relationships" | "fitness" | ...
+  mood      Mood     // deep | fun | debate | casual
+  joinedAt  DateTime @default(now())
+  expiresAt DateTime // auto-remove stale entries (TTL pattern)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([topic, mood]) // matching query: find same topic+mood
+  @@index([joinedAt])    // FIFO ordering within topic+mood
+}
+
+enum Mood {
+  DEEP
+  FUN
+  DEBATE
+  CASUAL
+}
+
+// ─── MATCHES ──────────────────────────────────────────────────────────────────
+// Created when two queued users are paired. Immutable after creation.
+
+model Match {
+  id        String      @id @default(cuid())
+  userAId   String
+  userBId   String
+  topic     String
+  mood      Mood
+  status    MatchStatus @default(PENDING)
+  createdAt DateTime    @default(now())
+
+  userA   User     @relation("MatchUserA", fields: [userAId], references: [id])
+  userB   User     @relation("MatchUserB", fields: [userBId], references: [id])
+  session Session?
+
+  @@index([userAId])
+  @@index([userBId])
+  @@index([status])
+}
+
+enum MatchStatus {
+  PENDING   // matched, waiting for both to confirm
+  ACTIVE    // session in progress
+  COMPLETED
+  CANCELLED
+}
+
+// ─── SESSIONS ─────────────────────────────────────────────────────────────────
+// The live conversation. Tracks lifecycle and timing.
+
+model Session {
+  id          String        @id @default(cuid())
+  matchId     String        @unique
+  userAId     String
+  userBId     String
+  topic       String
+  mood        Mood
+  status      SessionStatus @default(WAITING)
+  startedAt   DateTime?
+  endedAt     DateTime?
+  durationSec Int?          // computed on end
+  roomToken   String        @unique // opaque token used for WebRTC room
+  createdAt   DateTime      @default(now())
+
+  match     Match      @relation(fields: [matchId], references: [id])
+  userA     User       @relation("SessionUserA", fields: [userAId], references: [id])
+  userB     User       @relation("SessionUserB", fields: [userBId], references: [id])
+  ratings   Rating[]
+  recording Recording?
+
+  @@index([status])
+  @@index([userAId])
+  @@index([userBId])
+  @@index([createdAt])
+}
+
+enum SessionStatus {
+  WAITING    // room created, waiting for both to join
+  ACTIVE     // both connected
+  COMPLETED
+  ABANDONED  // one or both left before proper end
+}
+
+// ─── RECORDINGS ───────────────────────────────────────────────────────────────
+// Only created when BOTH users consent. Stored in S3/R2.
+
+model Recording {
+  id           String          @id @default(cuid())
+  sessionId    String          @unique
+  title        String
+  description  String?         @db.Text
+  tags         String[]
+  storageKey   String          // S3/R2 object key
+  storageUrl   String          // public/pre-signed URL
+  durationSec  Int
+  sizeBytes    BigInt
+  isPublic     Boolean         @default(false) // user publishes post-session
+  viewCount    Int             @default(0)
+  createdAt    DateTime        @default(now())
+  publishedAt  DateTime?
+
+  session      Session                  @relation(fields: [sessionId], references: [id])
+  participants RecordingParticipant[]
+
+  @@index([isPublic, publishedAt]) // feed query
+  @@index([viewCount])             // trending query
+  @@index([tags])                  // tag-based discovery
+}
+
+model RecordingParticipant {
+  id          String  @id @default(cuid())
+  recordingId String
+  userId      String
+  hasConsented Boolean @default(false)
+
+  recording Recording @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@unique([recordingId, userId])
+}
+
+// ─── RATINGS ──────────────────────────────────────────────────────────────────
+// Post-session 1–5 star rating + optional report. Drives reputation score.
+
+model Rating {
+  id          String     @id @default(cuid())
+  sessionId   String
+  raterId     String
+  rateeId     String
+  score       Int        // 1–5
+  isFlagged   Boolean    @default(false)
+  flagReason  String?
+  createdAt   DateTime   @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id])
+  rater   User    @relation("RatingsGiven", fields: [raterId], references: [id])
+  ratee   User    @relation("RatingsReceived", fields: [rateeId], references: [id])
+
+  @@unique([sessionId, raterId]) // one rating per session per rater
+  @@index([rateeId])             // fast reputation lookup
+  @@index([isFlagged])           // moderation queue
+}
